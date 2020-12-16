@@ -25,18 +25,16 @@ func main() {
 	}
 	defer f.Close()
 
-	//	scanner := bufio.NewScanner(f)
-	//	for scanner.Scan() {
-	//		fmt.Println(scanner.Text())
-	//	}
-
 	timer := time.NewTimer(time.Duration(timeLimit) * time.Second)
-	_ = timer
 
 	console := bufio.NewReader(os.Stdin)
 
-	eofCh := make(chan struct{})
-	questionCh := make(chan []string)
+	type Q struct {
+		q, a string
+		done bool
+	}
+
+	questionCh := make(chan Q)
 	answerCh := make(chan string)
 
 	csv := csv.NewReader(f)
@@ -50,31 +48,31 @@ loop:
 		go func() {
 			data, err := csv.Read()
 			if err == io.EOF {
-				eofCh <- struct{}{}
+				questionCh <- Q{done: true}
 				return
 			}
 			if err != nil {
 				log.Fatal(err)
 			}
-			questionCh <- data
-		}()
-
-		var q, a string
-
-		select {
-		case <-eofCh:
-			break loop
-		case data := <-questionCh:
 			if len(data) != 2 {
 				log.Fatal(fmt.Errorf("invalid CSV line %d: 2 fields expected", line))
 			}
-			q = data[0]
-			a = data[1]
+			questionCh <- Q{q: data[0], a: data[1]}
+		}()
+
+		var q Q
+
+		select {
 		case <-timer.C:
-			break loop
+			break loop // timeout, exit the loop
+		case q = <-questionCh:
 		}
 
-		fmt.Printf("%s = ", q)
+		if q.done {
+			break loop // all done, exit the loop
+		}
+
+		fmt.Printf("%s = ", q.q)
 		total++
 
 		go func() {
@@ -86,13 +84,13 @@ loop:
 		}()
 
 		select {
-		case input := <-answerCh:
-			if strings.TrimSpace(input) == a {
-				correct++
-			}
 		case <-timer.C:
 			fmt.Println()
 			break loop
+		case input := <-answerCh:
+			if strings.TrimSpace(input) == q.a {
+				correct++
+			}
 		}
 	}
 
